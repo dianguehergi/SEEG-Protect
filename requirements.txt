@@ -1,0 +1,5 @@
+# Runtime currently uses only Python standard library.
+# Optional future upgrade:
+# fastapi
+# uvicorn
+
