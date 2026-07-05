@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from seeg_protect.config import Settings
-from seeg_protect.models import LowBalanceAlert, PaymentConfirmation, SubscriptionRequest
+from seeg_protect.models import FraudCase, FraudStatusUpdate, LowBalanceAlert, PaymentConfirmation, SubscriptionRequest
 from seeg_protect.services import SeegProtectService
 from seeg_protect.sms import SmsGateway
 from seeg_protect.storage import Storage
@@ -213,6 +213,65 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(detail["payments"][0]["transaction_id"], "tx-meter-detail")
         self.assertEqual(detail["notifications"][0]["meter_id"], "meter-detail")
         self.assertTrue(detail["events"])
+
+    def test_fraud_case_reactivation_calculates_success_fee(self) -> None:
+        service = self.make_service()
+        service.register_fraud_case(
+            FraudCase(
+                fraud_case_id="FR-1",
+                meter_id="meter-fraud",
+                score_fraud=0.98,
+                fraud_code="BYPASS_AIMANT",
+                pv_amount_xaf=1000000,
+                nfe_amount_xaf=420000,
+                status="LISTE_ROUGE",
+                detected_at="2026-09-03T06:00:00+00:00",
+            )
+        )
+
+        result = service.update_fraud_status(
+            FraudStatusUpdate(
+                fraud_case_id="FR-1",
+                meter_id="meter-fraud",
+                meter_status="REACTIVE",
+                reactivation_reason="PAIEMENT_PV",
+                collected_amount_xaf=1420000,
+                changed_at="2026-09-05T09:12:00+00:00",
+            )
+        )
+
+        self.assertEqual(result["status"], "accepted")
+        self.assertEqual(result["fraud_case"]["success_fee_xaf"], 71000)
+        self.assertEqual(result["fraud_case"]["audit_flag"], 0)
+
+    def test_fraud_case_reactivation_without_payment_flags_audit(self) -> None:
+        service = self.make_service()
+        service.register_fraud_case(
+            FraudCase(
+                fraud_case_id="FR-AUDIT",
+                meter_id="meter-audit",
+                score_fraud=0.99,
+                fraud_code="FRAUDE_SW",
+                pv_amount_xaf=2000000,
+                nfe_amount_xaf=1200000,
+                status="LISTE_ROUGE",
+                detected_at="2026-09-03T06:00:00+00:00",
+            )
+        )
+
+        result = service.update_fraud_status(
+            FraudStatusUpdate(
+                fraud_case_id="FR-AUDIT",
+                meter_id="meter-audit",
+                meter_status="REACTIVE",
+                reactivation_reason="ERREUR_TECH",
+                collected_amount_xaf=0,
+                changed_at="2026-09-05T09:12:00+00:00",
+            )
+        )
+
+        self.assertEqual(result["fraud_case"]["success_fee_xaf"], 0)
+        self.assertEqual(result["fraud_case"]["audit_flag"], 1)
 
 
 if __name__ == "__main__":

@@ -63,6 +63,36 @@ SEEG_PROTECT_SMS_PROVIDER=stub
 Pour le pilote, `SEEG_PROTECT_SMS_PROVIDER=stub` est acceptable. Le SMS reel
 viendra ensuite avec le fournisseur SMS choisi.
 
+## Option Azure
+
+Le projet peut aussi etre deployee sur Azure, surtout si le partenaire prefere
+un environnement cloud entreprise.
+
+Options simples :
+
+- **Azure App Service for Containers** : reutilise le `Dockerfile` existant.
+- **Azure Container Apps** : adapte pour un pilote API/dashboard containerise.
+- **Azure Database for PostgreSQL** : remplacement futur de SQLite en production.
+- **Azure Key Vault** : stockage des secrets `SEEG_PROTECT_WEBHOOK_SECRET`,
+  `SEEG_PROTECT_ADMIN_TOKEN` et jetons SMS.
+
+Variables d'environnement a configurer dans Azure :
+
+```text
+SEEG_PROTECT_HOST=0.0.0.0
+SEEG_PROTECT_PORT=8000
+SEEG_PROTECT_DB=/app/data/seeg_protect.sqlite3
+SEEG_PROTECT_EVENT_LOG=/app/data/events.jsonl
+SEEG_PROTECT_SMS_OUTBOX=/app/data/sms_outbox.jsonl
+SEEG_PROTECT_WEBHOOK_SECRET=<secret fort>
+SEEG_PROTECT_ADMIN_TOKEN=<token partenaire>
+SEEG_PROTECT_SMS_PROVIDER=stub
+```
+
+Pour un pilote Azure serieux, prevoir un volume persistant pour `/app/data`.
+Sans volume persistant, les donnees SQLite et les logs peuvent disparaitre lors
+d'un redemarrage ou redeploiement du container.
+
 ## Test apres deploiement
 
 Verifier :

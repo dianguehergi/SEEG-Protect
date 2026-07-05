@@ -6,7 +6,14 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from .config import settings
-from .models import LowBalanceAlert, PaymentConfirmation, SubscriptionRequest, ValidationError
+from .models import (
+    FraudCase,
+    FraudStatusUpdate,
+    LowBalanceAlert,
+    PaymentConfirmation,
+    SubscriptionRequest,
+    ValidationError,
+)
 from .security import verify_signature
 from .services import SeegProtectService
 from .sms import SmsGateway
@@ -58,6 +65,12 @@ class ApiHandler(BaseHTTPRequestHandler):
             self.send_json(200, {"notifications": storage.list_notifications(self.query_limit(query, 50))})
             return
 
+        if parsed.path == "/fraud-cases":
+            if not self.require_admin(query):
+                return
+            self.send_json(200, {"fraud_cases": storage.list_fraud_cases(self.query_limit(query, 50))})
+            return
+
         if parsed.path == "/meters":
             if not self.require_admin(query):
                 return
@@ -83,6 +96,12 @@ class ApiHandler(BaseHTTPRequestHandler):
             if not self.require_admin(query, html=True):
                 return
             self.send_html(200, self.architecture_html())
+            return
+
+        if parsed.path == "/process":
+            if not self.require_admin(query, html=True):
+                return
+            self.send_html(200, self.process_html())
             return
 
         if parsed.path == "/roadmap":
@@ -114,15 +133,19 @@ class ApiHandler(BaseHTTPRequestHandler):
                         "GET /subscriptions?limit=50",
                         "GET /payments?limit=50",
                         "GET /notifications?limit=50",
+                        "GET /fraud-cases?limit=50",
                         "GET /meters?meter_id=...",
                         "GET /meter?meter_id=...",
                         "GET /dashboards",
                         "GET /dashboard",
                         "GET /architecture",
+                        "GET /process",
                         "GET /roadmap",
                         "POST /webhooks/subscriptions",
                         "POST /webhooks/payments",
                         "POST /webhooks/low-balance",
+                        "POST /webhooks/fraud-cases",
+                        "POST /webhooks/fraud-status",
                     ],
                 },
             )
@@ -154,6 +177,16 @@ class ApiHandler(BaseHTTPRequestHandler):
 
             if parsed.path == "/webhooks/low-balance":
                 response = service.handle_low_balance(LowBalanceAlert.from_payload(payload))
+                self.send_json(202, response)
+                return
+
+            if parsed.path == "/webhooks/fraud-cases":
+                response = service.register_fraud_case(FraudCase.from_payload(payload))
+                self.send_json(202, response)
+                return
+
+            if parsed.path == "/webhooks/fraud-status":
+                response = service.update_fraud_status(FraudStatusUpdate.from_payload(payload))
                 self.send_json(202, response)
                 return
 
@@ -253,6 +286,7 @@ class ApiHandler(BaseHTTPRequestHandler):
         metrics = storage.dashboard_metrics()
         subscriptions = storage.list_subscriptions(10)
         notifications = storage.list_notifications(10)
+        fraud_cases = storage.list_fraud_cases(10)
         events = storage.recent_events(10)
         return f"""<!doctype html>
 <html lang="fr">
@@ -318,6 +352,9 @@ class ApiHandler(BaseHTTPRequestHandler):
       {self.stat_html("Actives", summary["active_subscriptions"])}
       {self.stat_html("Paiements", summary["payments"])}
       {self.stat_html("SMS/notifications", summary["notifications"])}
+      {self.stat_html("Dossiers fraude", summary["fraud_cases"])}
+      {self.stat_html("Recouvre fraude", f'{summary["fraud_collected_xaf"]:,} FCFA'.replace(",", " "))}
+      {self.stat_html("Fee MEROE", f'{summary["fraud_success_fee_xaf"]:,} FCFA'.replace(",", " "))}
     </section>
     <section class="grid">
       <div class="panel span-6">
@@ -346,6 +383,14 @@ class ApiHandler(BaseHTTPRequestHandler):
         {self.bar_chart_html(metrics["event_types"], "event_type")}
       </div>
       <div class="panel span-6">
+        <h2>Statuts fraude</h2>
+        {self.bar_chart_html(metrics["fraud_statuses"], "status")}
+      </div>
+      <div class="panel span-6">
+        <h2>Codes fraude</h2>
+        {self.bar_chart_html(metrics["fraud_codes"], "fraud_code")}
+      </div>
+      <div class="panel span-6">
         <h2>Avancement mise en ligne</h2>
         {self.progress_html("MVP fonctionnel", 100)}
         {self.progress_html("Dashboard partenaire", 85)}
@@ -360,6 +405,10 @@ class ApiHandler(BaseHTTPRequestHandler):
       <div class="panel span-12">
         <h2>Derniers SMS</h2>
         {self.table_html(notifications, ["meter_id", "phone_number", "status", "message", "created_at"])}
+      </div>
+      <div class="panel span-12">
+        <h2>Dossiers fraude MEROE V6.4</h2>
+        {self.table_html(fraud_cases, ["fraud_case_id", "meter_id", "score_fraud", "fraud_code", "meter_status", "collected_amount_xaf", "success_fee_xaf", "audit_flag", "updated_at"])}
       </div>
       <div class="panel span-12">
         <h2>Journal technique recent</h2>
@@ -467,6 +516,7 @@ class ApiHandler(BaseHTTPRequestHandler):
       <a href="{self.admin_link('/dashboard')}">Dashboard operationnel</a>
       <a href="{self.admin_link('/roadmap')}">Suivi projet</a>
       <a href="{self.admin_link('/architecture')}">Architecture</a>
+      <a href="{self.admin_link('/process')}">Processus complet</a>
     </div>
   </header>
   <main>
@@ -492,10 +542,132 @@ class ApiHandler(BaseHTTPRequestHandler):
         <a class="button" href="{self.admin_link('/architecture')}">Ouvrir</a>
       </article>
       <article class="card">
+        <h2>Processus complet</h2>
+        <p>Vue de bout en bout : client, SEEG, API, simulation locale, fraude MEROE, dashboard et remplacement par les vraies donnees.</p>
+        <a class="button" href="{self.admin_link('/process')}">Ouvrir</a>
+      </article>
+      <article class="card">
         <h2>Fiche compteur</h2>
         <p>Recherche detaillee d'un compteur : abonnement, paiement, SMS et historique technique.</p>
         <a class="button secondary" href="{self.admin_link('/dashboard')}">Rechercher depuis le dashboard</a>
       </article>
+    </section>
+  </main>
+</body>
+</html>"""
+
+    def process_html(self) -> str:
+        summary = storage.dashboard_summary()
+        fraud_cases = storage.list_fraud_cases(6)
+        return f"""<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{escape(settings.app_name)} - Processus complet</title>
+  <style>
+    :root {{ --ink:#142126; --muted:#68767d; --line:#d8e1e4; --soft:#f4f7f8; --panel:#fff; --brand:#0b6b4f; --blue:#256f9c; --amber:#b86f00; --bad:#a33a3a; }}
+    * {{ box-sizing:border-box; }}
+    body {{ margin:0; background:var(--soft); color:var(--ink); font-family:"Segoe UI", Arial, sans-serif; }}
+    header {{ background:linear-gradient(135deg, #173f49, #0b6b4f); color:white; padding:26px 30px; }}
+    main {{ max-width:1240px; margin:0 auto; padding:24px 30px 42px; }}
+    h1 {{ margin:0 0 8px; font-size:31px; letter-spacing:0; }}
+    h2 {{ margin:0 0 12px; font-size:19px; }}
+    h3 {{ margin:0 0 8px; font-size:15px; color:#173f49; }}
+    p {{ color:var(--muted); }}
+    nav {{ display:flex; flex-wrap:wrap; gap:10px; margin-top:16px; }}
+    nav a, .button {{ color:white; background:rgba(255,255,255,.14); border:1px solid rgba(255,255,255,.25); padding:8px 11px; border-radius:6px; text-decoration:none; font-size:14px; }}
+    a {{ color:var(--brand); }}
+    .grid {{ display:grid; grid-template-columns:repeat(12, 1fr); gap:16px; }}
+    .panel {{ background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:17px; box-shadow:0 8px 20px rgba(20,33,38,.04); }}
+    .span-3 {{ grid-column:span 3; }}
+    .span-4 {{ grid-column:span 4; }}
+    .span-6 {{ grid-column:span 6; }}
+    .span-12 {{ grid-column:span 12; }}
+    .kpi {{ font-size:28px; font-weight:800; color:var(--brand); margin-top:4px; overflow-wrap:anywhere; }}
+    .label {{ color:var(--muted); font-size:13px; }}
+    .flow {{ display:grid; grid-template-columns:repeat(7, minmax(120px, 1fr)); gap:10px; align-items:stretch; }}
+    .node {{ border:1px solid var(--line); border-top:5px solid var(--brand); border-radius:8px; background:#fbfdfd; padding:12px; min-height:142px; }}
+    .node strong {{ display:block; margin-bottom:7px; color:var(--ink); }}
+    .node small {{ display:block; color:var(--muted); line-height:1.35; }}
+    .node.sim {{ border-top-color:var(--amber); }}
+    .node.fraud {{ border-top-color:var(--blue); }}
+    .node.cash {{ border-top-color:#168157; }}
+    .step {{ display:grid; grid-template-columns:44px 1fr; gap:12px; padding:13px 0; border-bottom:1px solid #e7edef; }}
+    .step:last-child {{ border-bottom:0; }}
+    .num {{ width:34px; height:34px; border-radius:999px; display:grid; place-items:center; background:#e9f5ef; color:var(--brand); font-weight:800; }}
+    code {{ background:#eef5f3; padding:2px 5px; border-radius:4px; }}
+    table {{ width:100%; border-collapse:collapse; }}
+    th, td {{ text-align:left; border-bottom:1px solid #e7edef; padding:9px; font-size:13px; vertical-align:top; }}
+    th {{ background:#eef5f3; color:#173f49; }}
+    @media (max-width:1050px) {{ .flow {{ grid-template-columns:1fr 1fr; }} .span-3,.span-4,.span-6 {{ grid-column:span 12; }} }}
+    @media (max-width:680px) {{ main {{ padding:16px; }} .flow {{ grid-template-columns:1fr; }} }}
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Processus complet SEEG Protect / MEROE</h1>
+    <div>Vue de bout en bout : client, SEEG, API, simulation locale, fraude, cash et dashboard.</div>
+    <nav>
+      <a href="{self.admin_link('/dashboards')}">Portail</a>
+      <a href="{self.admin_link('/dashboard')}">Dashboard</a>
+      <a href="{self.admin_link('/architecture')}">Architecture technique</a>
+      <a href="{self.admin_link('/fraud-cases?limit=20')}">Dossiers fraude JSON</a>
+    </nav>
+  </header>
+  <main>
+    <section class="grid">
+      <div class="panel span-3"><div class="label">Souscriptions</div><div class="kpi">{summary["subscriptions"]}</div></div>
+      <div class="panel span-3"><div class="label">SMS</div><div class="kpi">{summary["notifications"]}</div></div>
+      <div class="panel span-3"><div class="label">Dossiers fraude</div><div class="kpi">{summary["fraud_cases"]}</div></div>
+      <div class="panel span-3"><div class="label">Fee MEROE</div><div class="kpi">{f'{summary["fraud_success_fee_xaf"]:,}'.replace(",", " ")} FCFA</div></div>
+
+      <section class="panel span-12">
+        <h2>Le film complet</h2>
+        <div class="flow">
+          <div class="node"><strong>1. Client</strong><small>Possede un compteur EDAN prepaid. Il recoit une alerte SMS quand le solde devient faible.</small></div>
+          <div class="node"><strong>2. SEEG / EDAN</strong><small>Produit les donnees : souscription, paiement, solde, logs compteur, statut COUPE ou REACTIVE.</small></div>
+          <div class="node"><strong>3. Webhooks</strong><small>La SEEG pousse les evenements vers l'API avec une signature HMAC.</small></div>
+          <div class="node"><strong>4. API</strong><small>Valide le JSON, applique la logique metier, stocke les informations dans SQLite.</small></div>
+          <div class="node sim"><strong>5. Simulation locale</strong><small>Remplace provisoirement EDAN avec de faux compteurs et de faux dossiers fraude.</small></div>
+          <div class="node fraud"><strong>6. MEROE Fraude</strong><small>Transforme les signaux EDAN en Liste Rouge, score, statut et montant recouvrable.</small></div>
+          <div class="node cash"><strong>7. Dashboard</strong><small>Montre les KPI DAF/DSI : SMS, fraude, recouvrement, fee, audit.</small></div>
+        </div>
+      </section>
+
+      <section class="panel span-6">
+        <h2>Processus protection client</h2>
+        <div class="step"><div class="num">1</div><div><h3>Souscription</h3><p>Webhook <code>POST /webhooks/subscriptions</code>. Le compteur passe en attente de paiement.</p></div></div>
+        <div class="step"><div class="num">2</div><div><h3>Paiement</h3><p>Webhook <code>POST /webhooks/payments</code>. L'abonnement devient actif.</p></div></div>
+        <div class="step"><div class="num">3</div><div><h3>Alerte solde faible</h3><p>Webhook <code>POST /webhooks/low-balance</code>. Le service calcule les jours restants.</p></div></div>
+        <div class="step"><div class="num">4</div><div><h3>SMS</h3><p>En demo, le SMS va dans <code>logs/sms_outbox.jsonl</code>. En production, il part chez le fournisseur SMS.</p></div></div>
+      </section>
+
+      <section class="panel span-6">
+        <h2>Processus fraude MEROE</h2>
+        <div class="step"><div class="num">1</div><div><h3>Detection</h3><p>Webhook <code>POST /webhooks/fraud-cases</code>. MEROE recoit le score et le code fraude.</p></div></div>
+        <div class="step"><div class="num">2</div><div><h3>Terrain SEEG</h3><p>Agent et huissier traitent la Liste Rouge : constat, coupure, PV.</p></div></div>
+        <div class="step"><div class="num">3</div><div><h3>Statut compteur</h3><p>Webhook <code>POST /webhooks/fraud-status</code>. Le statut devient <code>COUPE</code> ou <code>REACTIVE</code>.</p></div></div>
+        <div class="step"><div class="num">4</div><div><h3>Cash</h3><p>Si la SEEG encaisse, MEROE calcule 5% de success fee. Si motif suspect, le dossier passe en audit.</p></div></div>
+      </section>
+
+      <section class="panel span-6">
+        <h2>Simulation locale</h2>
+        <p>La simulation sert a voir l'application fonctionner avant les vraies donnees EDAN.</p>
+        <p><code>python scripts\\demo_fraud_data.py</code></p>
+        <p>Elle cree des compteurs fictifs, des SMS, des dossiers Liste Rouge, des statuts <code>COUPE</code>/<code>REACTIVE</code>, du recouvrement et une alerte audit.</p>
+      </section>
+
+      <section class="panel span-6">
+        <h2>Remplacement par les vraies donnees</h2>
+        <p>Quand la SEEG donne les vrais fichiers ou webhooks EDAN, on remplace seulement la source de donnees. Le dashboard, la base, les endpoints et les calculs restent les memes.</p>
+        <p>La logique cible : <code>Simulation locale -> donnees pilote EDAN -> API production SEEG</code>.</p>
+      </section>
+
+      <section class="panel span-12">
+        <h2>Dossiers fraude actuellement visibles</h2>
+        {self.table_html(fraud_cases, ["fraud_case_id", "meter_id", "score_fraud", "fraud_code", "meter_status", "reactivation_reason", "collected_amount_xaf", "success_fee_xaf", "audit_flag"])}
+      </section>
     </section>
   </main>
 </body>

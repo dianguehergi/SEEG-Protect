@@ -1,0 +1,248 @@
+openapi: 3.0.1
+info:
+  title: API MEROE Scoring Fraude V6.4
+  version: 1.0.0
+  description: >
+    Specification cible pour l'integration SEEG / MEROE autour de la Liste Rouge,
+    du statut EDAN, du webhook de reactivation et du bordereau DAF mensuel.
+servers:
+  - url: https://sandbox.api.meroe.ai
+    description: Sandbox MEROE
+  - url: https://api.meroe.ai
+    description: Production MEROE
+paths:
+  /v1/liste-rouge:
+    post:
+      summary: Reception ou publication d'un dossier Liste Rouge
+      description: >
+        Un compteur suspect est transmis avec son score, son motif, son code de
+        grille SEEG et les montants servant au calcul DAF.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ListeRougeItem"
+            example:
+              id_compteur: "123456789"
+              score_fraude: 0.98
+              motif_fraude: BYPASS_AIMANT
+              code_grille_seeg: BYPASS_AIMANT
+              montant_pv_estime_fcfa: 1000000
+              montant_non_facture_estime_fcfa: 420000
+              statut_compteur_edan: COUPE
+      responses:
+        "202":
+          description: Dossier accepte
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /v1/statut-compteur/{id_compteur}:
+    get:
+      summary: Lecture du statut EDAN d'un compteur
+      description: >
+        Acces read-only. MEROE lit le statut EDAN et le motif de reactivation
+        pour determiner si un dossier devient facturable.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id_compteur
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Statut courant du compteur
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatutCompteur"
+              example:
+                id_compteur: "123456789"
+                statut: REACTIVE
+                date_changement_statut: "2026-09-05T09:12:00Z"
+                motif_reactivation: PAIEMENT_PV
+                montant_encaisse_fcfa: 750000
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /v1/webhook/edan-reactivation:
+    post:
+      summary: Webhook J+1 quand un compteur Liste Rouge est reactive
+      description: >
+        La SEEG notifie MEROE quand un compteur Liste Rouge passe en REACTIVE.
+        Le header X-SEEG-Signature contient la signature HMAC/SHA-256 du body.
+      parameters:
+        - name: X-SEEG-Signature
+          in: header
+          required: true
+          schema:
+            type: string
+            example: sha256=...
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ReactivationWebhook"
+            example:
+              event: COMPTEUR_REACTIVE
+              id_compteur: "123456789"
+              date_reactivation: "2026-09-05T09:12:00Z"
+              motif: PAIEMENT_PV
+              montant_pv_reference: 1500000
+      responses:
+        "202":
+          description: Webhook accepte
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+  /v1/bordereau-mensuel:
+    get:
+      summary: Generation du bordereau DAF mensuel
+      description: >
+        Agrege les dossiers Liste Rouge, les statuts REACTIVE et les montants
+        declares pour produire le bordereau de recouvrement Article 8.4.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: mois
+          in: query
+          required: true
+          schema:
+            type: string
+            pattern: "^\\d{4}-\\d{2}$"
+            example: "2026-09"
+        - name: signature_daf
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: false
+      responses:
+        "200":
+          description: Bordereau mensuel
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BordereauMensuel"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  schemas:
+    ListeRougeItem:
+      type: object
+      required:
+        - id_compteur
+        - score_fraude
+        - motif_fraude
+        - code_grille_seeg
+        - montant_pv_estime_fcfa
+      properties:
+        id_compteur:
+          type: string
+        score_fraude:
+          type: number
+          minimum: 0
+          maximum: 1
+        motif_fraude:
+          $ref: "#/components/schemas/CodeFraude"
+        code_grille_seeg:
+          $ref: "#/components/schemas/CodeFraude"
+        montant_pv_estime_fcfa:
+          type: integer
+          minimum: 0
+        montant_non_facture_estime_fcfa:
+          type: integer
+          minimum: 0
+          default: 0
+        statut_compteur_edan:
+          type: string
+          enum: [CONSTAT, PV_EMIS, COUPE, REACTIVE]
+    StatutCompteur:
+      type: object
+      required: [id_compteur, statut, date_changement_statut]
+      properties:
+        id_compteur:
+          type: string
+        statut:
+          type: string
+          enum: [CONSTAT, PV_EMIS, COUPE, REACTIVE]
+        date_changement_statut:
+          type: string
+          format: date-time
+        motif_reactivation:
+          type: string
+          enum: [PAIEMENT_PV, ACCOMPTE_PV, ERREUR_TECH, REGULARISATION_GRATUITE]
+        montant_encaisse_fcfa:
+          type: integer
+          minimum: 0
+    ReactivationWebhook:
+      type: object
+      required: [event, id_compteur, date_reactivation, motif]
+      properties:
+        event:
+          type: string
+          enum: [COMPTEUR_REACTIVE]
+        id_compteur:
+          type: string
+        date_reactivation:
+          type: string
+          format: date-time
+        motif:
+          type: string
+          enum: [PAIEMENT_PV, ACCOMPTE_PV, ERREUR_TECH, REGULARISATION_GRATUITE]
+        montant_pv_reference:
+          type: integer
+          minimum: 0
+    BordereauMensuel:
+      type: object
+      properties:
+        mois:
+          type: string
+        nb_dossiers_liste_rouge:
+          type: integer
+        nb_dossiers_reactive:
+          type: integer
+        montant_total_pv_estime_fcfa:
+          type: integer
+        montant_total_encaisse_fcfa:
+          type: integer
+        taux_success_fee:
+          type: number
+          example: 0.05
+        success_fee_ht_fcfa:
+          type: integer
+        signature_daf_requise:
+          type: boolean
+    CodeFraude:
+      type: string
+      enum:
+        - BYPASS_SHUNT
+        - BYPASS_AIMANT
+        - INV_PHASE
+        - CAPOT_OUVERT
+        - FRAUDE_SW
+        - RACC_ILLICITE
+  responses:
+    BadRequest:
+      description: Requete invalide
+    Unauthorized:
+      description: Authentification ou signature invalide
+    Forbidden:
+      description: Acces refuse ou validation DAF manquante
+    NotFound:
+      description: Compteur ou dossier Liste Rouge introuvable
+

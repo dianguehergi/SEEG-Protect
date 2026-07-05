@@ -5,12 +5,14 @@ from typing import Any
 
 from .config import Settings
 from .logging_utils import append_event
-from .models import LowBalanceAlert, PaymentConfirmation, SubscriptionRequest
+from .models import FraudCase, FraudStatusUpdate, LowBalanceAlert, PaymentConfirmation, SubscriptionRequest
 from .sms import SmsGateway
 from .storage import Storage
 
 
 class SeegProtectService:
+    SUCCESS_FEE_RATE = 0.05
+
     def __init__(self, settings: Settings, storage: Storage, sms_gateway: SmsGateway) -> None:
         self.settings = settings
         self.storage = storage
@@ -119,6 +121,47 @@ class SeegProtectService:
         if daily_average_kwh <= 0:
             raise ValueError("daily_average_kwh must be greater than zero")
         return max(0, math.ceil(balance_kwh / daily_average_kwh))
+
+    def register_fraud_case(self, fraud_case: FraudCase) -> dict[str, Any]:
+        case = self.storage.upsert_fraud_case(
+            fraud_case.fraud_case_id,
+            fraud_case.meter_id,
+            fraud_case.score_fraud,
+            fraud_case.fraud_code,
+            fraud_case.pv_amount_xaf,
+            fraud_case.nfe_amount_xaf,
+            fraud_case.status,
+            fraud_case.detected_at,
+        )
+        self._record_event("fraud_case.received", fraud_case.meter_id, fraud_case.__dict__)
+        return {"status": "accepted", "fraud_case": case}
+
+    def update_fraud_status(self, update: FraudStatusUpdate) -> dict[str, Any]:
+        existing = self.storage.get_fraud_case(update.fraud_case_id)
+        if not existing:
+            return {
+                "status": "ignored",
+                "reason": "unknown_fraud_case",
+                "fraud_case_id": update.fraud_case_id,
+            }
+
+        audit_flag = (
+            update.meter_status == "REACTIVE"
+            and (update.reactivation_reason or "").upper() not in {"PAIEMENT_PV", "ACOMPTE_PV", "ACCOMPTE_PV"}
+        )
+        success_fee = round(update.collected_amount_xaf * self.SUCCESS_FEE_RATE)
+        case = self.storage.update_fraud_status(
+            update.fraud_case_id,
+            update.meter_id,
+            update.meter_status,
+            update.reactivation_reason,
+            update.collected_amount_xaf,
+            success_fee,
+            audit_flag,
+            update.changed_at,
+        )
+        self._record_event("fraud_status.updated", update.meter_id, update.__dict__ | {"audit_flag": audit_flag})
+        return {"status": "accepted", "fraud_case": case}
 
     def _record_event(self, event_type: str, reference: str | None, payload: dict[str, Any]) -> None:
         payload_json = json.dumps(payload, ensure_ascii=False)

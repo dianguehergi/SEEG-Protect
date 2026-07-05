@@ -1,0 +1,8 @@
+code_fraude,type_fraude,bareme_pv_ht_fcfa,detail,process_constat
+BYPASS_SHUNT,BYPASS / Shunt,1500000,Pontage direct avant compteur,Agent terrain + huissier
+BYPASS_AIMANT,BYPASS / Aimant,1000000,Ralentissement ou neutralisation compteur,Agent terrain + huissier
+INV_PHASE,Inversion phases,750000,Entree et sortie inversees,Agent terrain + huissier
+CAPOT_OUVERT,Ouverture capot,500000,Plomb casse ou capot ouvert sans autorisation SEEG,Agent terrain + huissier
+FRAUDE_SW,Fraude logicielle,2000000,Hack firmware ou reprogrammation EDAN,Labo metrologie + huissier
+RACC_ILLICITE,Raccordement illicite,2500000,Pas de contrat ou prise directe,Agent terrain + huissier
+

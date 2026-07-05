@@ -77,6 +77,29 @@ class Storage:
 
                 CREATE INDEX IF NOT EXISTS idx_events_reference_created
                 ON technical_events (reference, created_at);
+
+                CREATE TABLE IF NOT EXISTS fraud_cases (
+                    fraud_case_id TEXT PRIMARY KEY,
+                    meter_id TEXT NOT NULL,
+                    score_fraud REAL NOT NULL,
+                    fraud_code TEXT NOT NULL,
+                    pv_amount_xaf INTEGER NOT NULL,
+                    nfe_amount_xaf INTEGER NOT NULL,
+                    status TEXT NOT NULL,
+                    meter_status TEXT NOT NULL,
+                    reactivation_reason TEXT,
+                    collected_amount_xaf INTEGER NOT NULL,
+                    success_fee_xaf INTEGER NOT NULL,
+                    audit_flag INTEGER NOT NULL,
+                    detected_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_fraud_cases_meter
+                ON fraud_cases (meter_id);
+
+                CREATE INDEX IF NOT EXISTS idx_fraud_cases_status
+                ON fraud_cases (status, meter_status);
                 """
             )
 
@@ -218,11 +241,21 @@ class Storage:
             ).fetchone()
             payments = db.execute("SELECT COUNT(*) AS total FROM payments").fetchone()
             notifications = db.execute("SELECT COUNT(*) AS total FROM notifications").fetchone()
+            fraud_cases = db.execute("SELECT COUNT(*) AS total FROM fraud_cases").fetchone()
+            fraud_collected = db.execute(
+                "SELECT COALESCE(SUM(collected_amount_xaf), 0) AS total FROM fraud_cases"
+            ).fetchone()
+            fraud_fee = db.execute(
+                "SELECT COALESCE(SUM(success_fee_xaf), 0) AS total FROM fraud_cases"
+            ).fetchone()
             return {
                 "subscriptions": int(subscriptions["total"]),
                 "active_subscriptions": int(active["total"]),
                 "payments": int(payments["total"]),
                 "notifications": int(notifications["total"]),
+                "fraud_cases": int(fraud_cases["total"]),
+                "fraud_collected_xaf": int(fraud_collected["total"]),
+                "fraud_success_fee_xaf": int(fraud_fee["total"]),
             }
 
     def dashboard_metrics(self) -> dict[str, Any]:
@@ -261,11 +294,30 @@ class Storage:
                 LIMIT 8
                 """
             ).fetchall()
+            fraud_statuses = db.execute(
+                """
+                SELECT meter_status AS status, COUNT(*) AS total
+                FROM fraud_cases
+                GROUP BY meter_status
+                ORDER BY total DESC
+                """
+            ).fetchall()
+            fraud_codes = db.execute(
+                """
+                SELECT fraud_code, COUNT(*) AS total
+                FROM fraud_cases
+                GROUP BY fraud_code
+                ORDER BY total DESC
+                LIMIT 8
+                """
+            ).fetchall()
             return {
                 "subscription_statuses": [dict(row) for row in subscription_statuses],
                 "notification_statuses": [dict(row) for row in notification_statuses],
                 "notification_days": list(reversed([dict(row) for row in notification_days])),
                 "event_types": [dict(row) for row in event_types],
+                "fraud_statuses": [dict(row) for row in fraud_statuses],
+                "fraud_codes": [dict(row) for row in fraud_codes],
             }
 
     def meter_detail(self, meter_id: str, limit: int = 20) -> dict[str, Any] | None:
@@ -317,6 +369,113 @@ class Storage:
                 "notifications": [dict(row) for row in notifications],
                 "events": [dict(row) for row in events],
             }
+
+    def upsert_fraud_case(
+        self,
+        fraud_case_id: str,
+        meter_id: str,
+        score_fraud: float,
+        fraud_code: str,
+        pv_amount_xaf: int,
+        nfe_amount_xaf: int,
+        status: str,
+        detected_at: str,
+    ) -> dict[str, Any]:
+        with self.connection() as db:
+            db.execute(
+                """
+                INSERT INTO fraud_cases (
+                    fraud_case_id, meter_id, score_fraud, fraud_code, pv_amount_xaf,
+                    nfe_amount_xaf, status, meter_status, collected_amount_xaf,
+                    success_fee_xaf, audit_flag, detected_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'LISTE_ROUGE', 0, 0, 0, ?, ?)
+                ON CONFLICT(fraud_case_id) DO UPDATE SET
+                    meter_id = excluded.meter_id,
+                    score_fraud = excluded.score_fraud,
+                    fraud_code = excluded.fraud_code,
+                    pv_amount_xaf = excluded.pv_amount_xaf,
+                    nfe_amount_xaf = excluded.nfe_amount_xaf,
+                    status = excluded.status,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    fraud_case_id,
+                    meter_id,
+                    score_fraud,
+                    fraud_code,
+                    pv_amount_xaf,
+                    nfe_amount_xaf,
+                    status,
+                    detected_at,
+                    utc_now_iso(),
+                ),
+            )
+            row = db.execute(
+                "SELECT * FROM fraud_cases WHERE fraud_case_id = ?",
+                (fraud_case_id,),
+            ).fetchone()
+            return dict(row) if row else {}
+
+    def update_fraud_status(
+        self,
+        fraud_case_id: str,
+        meter_id: str,
+        meter_status: str,
+        reactivation_reason: str | None,
+        collected_amount_xaf: int,
+        success_fee_xaf: int,
+        audit_flag: bool,
+        changed_at: str,
+    ) -> dict[str, Any]:
+        with self.connection() as db:
+            db.execute(
+                """
+                UPDATE fraud_cases
+                SET meter_id = ?, meter_status = ?, reactivation_reason = ?,
+                    collected_amount_xaf = ?, success_fee_xaf = ?, audit_flag = ?,
+                    updated_at = ?
+                WHERE fraud_case_id = ?
+                """,
+                (
+                    meter_id,
+                    meter_status,
+                    reactivation_reason,
+                    collected_amount_xaf,
+                    success_fee_xaf,
+                    1 if audit_flag else 0,
+                    changed_at,
+                    fraud_case_id,
+                ),
+            )
+            row = db.execute(
+                "SELECT * FROM fraud_cases WHERE fraud_case_id = ?",
+                (fraud_case_id,),
+            ).fetchone()
+            return dict(row) if row else {}
+
+    def get_fraud_case(self, fraud_case_id: str) -> dict[str, Any] | None:
+        with self.connection() as db:
+            row = db.execute(
+                "SELECT * FROM fraud_cases WHERE fraud_case_id = ?",
+                (fraud_case_id,),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def list_fraud_cases(self, limit: int = 50) -> list[dict[str, Any]]:
+        with self.connection() as db:
+            rows = db.execute(
+                """
+                SELECT fraud_case_id, meter_id, score_fraud, fraud_code, pv_amount_xaf,
+                       nfe_amount_xaf, status, meter_status, reactivation_reason,
+                       collected_amount_xaf, success_fee_xaf, audit_flag,
+                       detected_at, updated_at
+                FROM fraud_cases
+                ORDER BY updated_at DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+            return [dict(row) for row in rows]
 
     def save_event(self, event_type: str, reference: str | None, payload_json: str) -> None:
         with self.connection() as db:

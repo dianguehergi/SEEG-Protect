@@ -1,5 +1,9 @@
 # MEROE V5.6 - Teaser DAF + DSI
 
+> Mise a jour projet : les complements fraude MEROE V6.4 sont disponibles dans
+> `docs/Flux_Fraude_MEROE_V6_4.md`, `docs/api_meroe_seeg_v1.yaml` et
+> `docs/grille_fraude_seeg.csv`.
+
 ## 4 produits propres. 0 flou. B2B/B2C verrouille.
 
 MEROE V5.6 est un pack de quatre produits concu pour aider la SEEG a recuperer
@@ -56,6 +60,28 @@ MEROE facture 5% uniquement si la SEEG recouvre grace aux listes produites.
 ```text
 0 FCFA recouvre = 0 FCFA facture
 ```
+
+### Complement V6.4 - Boucle fraude fermee
+
+Le scoring fraude V6.4 formalise la boucle complete :
+
+```text
+Scanner MEROE -> Liste Rouge -> Terrain SEEG -> Statut EDAN -> Bordereau DAF -> Facture 5%
+```
+
+Points verrouilles :
+
+- MEROE lit les signaux EDAN deja presents : tension, tamper, 0 kWh, perte
+  transformateur, inversion flux.
+- MEROE transmet un `id_compteur`, un score, un code fraude et un montant estime.
+- La SEEG garde le terrain, le PV, le client et la caisse.
+- La facturation MEROE se calcule sur le montant encaisse ou valide par bordereau
+  DAF, avec prorata en cas de paiement partiel.
+- Les flux standards restent anonymises : pas de nom client, pas de telephone,
+  pas de PV huissier.
+
+La grille fraude V6.4 ajoute les codes `BYPASS_SHUNT`, `BYPASS_AIMANT`,
+`INV_PHASE`, `CAPOT_OUVERT`, `FRAUDE_SW` et `RACC_ILLICITE`.
 
 ## Produit 2 - SOS Energie
 

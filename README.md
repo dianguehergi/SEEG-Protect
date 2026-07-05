@@ -25,18 +25,37 @@ http://127.0.0.1:8000
 - `GET /subscriptions?limit=50` : dernieres souscriptions.
 - `GET /payments?limit=50` : derniers paiements.
 - `GET /notifications?limit=50` : derniers SMS/notifications.
+- `GET /fraud-cases?limit=50` : dossiers fraude MEROE V6.4.
 - `GET /meters?meter_id=...` : detail JSON d'un compteur.
 - `GET /meter?meter_id=...` : fiche HTML d'un compteur.
 - `GET /dashboards` : portail des tableaux de bord partenaires.
 - `GET /dashboard` : tableau de bord local en HTML.
 - `GET /architecture` : page d'explication du scenario et de l'architecture.
+- `GET /process` : vue de bout en bout client, SEEG, simulation, fraude et dashboard.
 - `GET /roadmap` : page de suivi projet pour partenaires.
 - `POST /webhooks/subscriptions` : reception d'une demande de souscription.
 - `POST /webhooks/payments` : confirmation de prelevement SEEG.
 - `POST /webhooks/low-balance` : alerte de solde faible.
+- `POST /webhooks/fraud-cases` : reception d'un dossier Liste Rouge fraude.
+- `POST /webhooks/fraud-status` : mise a jour statut compteur fraude.
 
 Les endpoints `POST` exigent l'en-tete `X-SEEG-Signature`, calcule avec HMAC SHA-256
 sur le corps brut de la requete.
+
+## Extension MEROE fraude V6.4
+
+Le projet contient aussi les nouveaux livrables de cadrage pour la brique
+scoring fraude / Liste Rouge :
+
+- `docs/Flux_Fraude_MEROE_V6_4.md` : flux Data EDAN -> Terrain SEEG -> Cash DAF.
+- `docs/api_meroe_seeg_v1.yaml` : OpenAPI cible pour Liste Rouge, statut EDAN,
+  webhook de reactivation et bordereau DAF.
+- `docs/grille_fraude_seeg.csv` : codes fraude SEEG et baremes PV HT.
+- `scripts/sandbox_meroe_fraud_flow.py` : simulation des 3 cas sandbox.
+
+Cette extension reste au niveau specification dans le MVP actuel. Elle prepare
+l'industrialisation du scanner MEROE : score fraude, statut compteur read-only,
+facturation 5% au prorata du montant recouvre et controles DAF/DSI.
 
 ## Exemple de signature
 
@@ -152,6 +171,19 @@ Pour voir la fiche d'un compteur genere par la demo, copie son `meter_id` puis o
 http://127.0.0.1:8000/meter?meter_id=api-meter-...
 ```
 
+Pour tester la logique fraude V6.4 sans serveur externe :
+
+```powershell
+python scripts\sandbox_meroe_fraud_flow.py
+```
+
+Pour charger de fausses donnees completes dans SQLite et les voir dans le
+dashboard :
+
+```powershell
+python scripts\demo_fraud_data.py
+```
+
 ## Tests
 
 ```powershell
@@ -165,4 +197,5 @@ Voir :
 ```text
 docs/Deploiement_en_ligne.md
 docs/Mise_en_ligne_partenaires.md
+docs/Architecture_Projet_MEROE.md
 ```
