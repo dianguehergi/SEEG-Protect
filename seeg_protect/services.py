@@ -5,7 +5,15 @@ from typing import Any
 
 from .config import Settings
 from .logging_utils import append_event
-from .models import FraudCase, FraudStatusUpdate, LowBalanceAlert, PaymentConfirmation, SubscriptionRequest
+from .models import (
+    FraudCase,
+    FraudStatusUpdate,
+    LowBalanceAlert,
+    PaymentConfirmation,
+    SosEnergyAdvance,
+    SosEnergyRepayment,
+    SubscriptionRequest,
+)
 from .sms import SmsGateway
 from .storage import Storage
 
@@ -162,6 +170,38 @@ class SeegProtectService:
         )
         self._record_event("fraud_status.updated", update.meter_id, update.__dict__ | {"audit_flag": audit_flag})
         return {"status": "accepted", "fraud_case": case}
+
+    def request_sos_energy(self, advance: SosEnergyAdvance) -> dict[str, Any]:
+        record = self.storage.create_sos_energy_advance(
+            advance.advance_id,
+            advance.meter_id,
+            advance.phone_number,
+            advance.amount_advanced_xaf,
+            advance.amount_due_xaf,
+            advance.status,
+            advance.requested_at,
+            advance.due_at,
+        )
+        self._record_event("sos_energy.requested", advance.meter_id, advance.__dict__)
+        return {"status": "accepted", "sos_energy": record}
+
+    def repay_sos_energy(self, repayment: SosEnergyRepayment) -> dict[str, Any]:
+        existing = self.storage.get_sos_energy_advance(repayment.advance_id)
+        if not existing:
+            return {
+                "status": "ignored",
+                "reason": "unknown_sos_energy_advance",
+                "advance_id": repayment.advance_id,
+            }
+        record = self.storage.repay_sos_energy_advance(
+            repayment.advance_id,
+            repayment.meter_id,
+            repayment.amount_paid_xaf,
+            repayment.status,
+            repayment.paid_at,
+        )
+        self._record_event("sos_energy.repaid", repayment.meter_id, repayment.__dict__)
+        return {"status": "accepted", "sos_energy": record}
 
     def _record_event(self, event_type: str, reference: str | None, payload: dict[str, Any]) -> None:
         payload_json = json.dumps(payload, ensure_ascii=False)

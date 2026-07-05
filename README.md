@@ -26,6 +26,7 @@ http://127.0.0.1:8000
 - `GET /payments?limit=50` : derniers paiements.
 - `GET /notifications?limit=50` : derniers SMS/notifications.
 - `GET /fraud-cases?limit=50` : dossiers fraude MEROE V6.4.
+- `GET /sos-energy?limit=50` : avances SOS Energie et remboursements.
 - `GET /meters?meter_id=...` : detail JSON d'un compteur.
 - `GET /meter?meter_id=...` : fiche HTML d'un compteur.
 - `GET /dashboards` : portail des tableaux de bord partenaires.
@@ -38,6 +39,8 @@ http://127.0.0.1:8000
 - `POST /webhooks/low-balance` : alerte de solde faible.
 - `POST /webhooks/fraud-cases` : reception d'un dossier Liste Rouge fraude.
 - `POST /webhooks/fraud-status` : mise a jour statut compteur fraude.
+- `POST /webhooks/sos-energy` : demande d'avance SOS Energie.
+- `POST /webhooks/sos-energy-repayments` : remboursement SOS Energie.
 
 Les endpoints `POST` exigent l'en-tete `X-SEEG-Signature`, calcule avec HMAC SHA-256
 sur le corps brut de la requete.

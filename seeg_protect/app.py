@@ -11,6 +11,8 @@ from .models import (
     FraudStatusUpdate,
     LowBalanceAlert,
     PaymentConfirmation,
+    SosEnergyAdvance,
+    SosEnergyRepayment,
     SubscriptionRequest,
     ValidationError,
 )
@@ -69,6 +71,12 @@ class ApiHandler(BaseHTTPRequestHandler):
             if not self.require_admin(query):
                 return
             self.send_json(200, {"fraud_cases": storage.list_fraud_cases(self.query_limit(query, 50))})
+            return
+
+        if parsed.path == "/sos-energy":
+            if not self.require_admin(query):
+                return
+            self.send_json(200, {"sos_energy": storage.list_sos_energy_advances(self.query_limit(query, 50))})
             return
 
         if parsed.path == "/meters":
@@ -134,6 +142,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                         "GET /payments?limit=50",
                         "GET /notifications?limit=50",
                         "GET /fraud-cases?limit=50",
+                        "GET /sos-energy?limit=50",
                         "GET /meters?meter_id=...",
                         "GET /meter?meter_id=...",
                         "GET /dashboards",
@@ -146,6 +155,8 @@ class ApiHandler(BaseHTTPRequestHandler):
                         "POST /webhooks/low-balance",
                         "POST /webhooks/fraud-cases",
                         "POST /webhooks/fraud-status",
+                        "POST /webhooks/sos-energy",
+                        "POST /webhooks/sos-energy-repayments",
                     ],
                 },
             )
@@ -187,6 +198,16 @@ class ApiHandler(BaseHTTPRequestHandler):
 
             if parsed.path == "/webhooks/fraud-status":
                 response = service.update_fraud_status(FraudStatusUpdate.from_payload(payload))
+                self.send_json(202, response)
+                return
+
+            if parsed.path == "/webhooks/sos-energy":
+                response = service.request_sos_energy(SosEnergyAdvance.from_payload(payload))
+                self.send_json(202, response)
+                return
+
+            if parsed.path == "/webhooks/sos-energy-repayments":
+                response = service.repay_sos_energy(SosEnergyRepayment.from_payload(payload))
                 self.send_json(202, response)
                 return
 
@@ -287,6 +308,7 @@ class ApiHandler(BaseHTTPRequestHandler):
         subscriptions = storage.list_subscriptions(10)
         notifications = storage.list_notifications(10)
         fraud_cases = storage.list_fraud_cases(10)
+        sos_energy = storage.list_sos_energy_advances(10)
         events = storage.recent_events(10)
         return f"""<!doctype html>
 <html lang="fr">
@@ -355,6 +377,8 @@ class ApiHandler(BaseHTTPRequestHandler):
       {self.stat_html("Dossiers fraude", summary["fraud_cases"])}
       {self.stat_html("Recouvre fraude", f'{summary["fraud_collected_xaf"]:,} FCFA'.replace(",", " "))}
       {self.stat_html("Fee MEROE", f'{summary["fraud_success_fee_xaf"]:,} FCFA'.replace(",", " "))}
+      {self.stat_html("SOS Energie", summary["sos_energy_advances"])}
+      {self.stat_html("Marge SOS", f'{summary["sos_energy_margin_xaf"]:,} FCFA'.replace(",", " "))}
     </section>
     <section class="grid">
       <div class="panel span-6">
@@ -391,6 +415,10 @@ class ApiHandler(BaseHTTPRequestHandler):
         {self.bar_chart_html(metrics["fraud_codes"], "fraud_code")}
       </div>
       <div class="panel span-6">
+        <h2>SOS Energie</h2>
+        {self.bar_chart_html(metrics["sos_statuses"], "status")}
+      </div>
+      <div class="panel span-6">
         <h2>Avancement mise en ligne</h2>
         {self.progress_html("MVP fonctionnel", 100)}
         {self.progress_html("Dashboard partenaire", 85)}
@@ -409,6 +437,10 @@ class ApiHandler(BaseHTTPRequestHandler):
       <div class="panel span-12">
         <h2>Dossiers fraude MEROE V6.4</h2>
         {self.table_html(fraud_cases, ["fraud_case_id", "meter_id", "score_fraud", "fraud_code", "meter_status", "collected_amount_xaf", "success_fee_xaf", "audit_flag", "updated_at"])}
+      </div>
+      <div class="panel span-12">
+        <h2>SOS Energie</h2>
+        {self.table_html(sos_energy, ["advance_id", "meter_id", "amount_advanced_xaf", "amount_due_xaf", "amount_paid_xaf", "margin_xaf", "status", "due_at", "paid_at"])}
       </div>
       <div class="panel span-12">
         <h2>Journal technique recent</h2>
@@ -559,6 +591,7 @@ class ApiHandler(BaseHTTPRequestHandler):
     def process_html(self) -> str:
         summary = storage.dashboard_summary()
         fraud_cases = storage.list_fraud_cases(6)
+        sos_energy = storage.list_sos_energy_advances(6)
         return f"""<!doctype html>
 <html lang="fr">
 <head>
@@ -621,6 +654,8 @@ class ApiHandler(BaseHTTPRequestHandler):
       <div class="panel span-3"><div class="label">SMS</div><div class="kpi">{summary["notifications"]}</div></div>
       <div class="panel span-3"><div class="label">Dossiers fraude</div><div class="kpi">{summary["fraud_cases"]}</div></div>
       <div class="panel span-3"><div class="label">Fee MEROE</div><div class="kpi">{f'{summary["fraud_success_fee_xaf"]:,}'.replace(",", " ")} FCFA</div></div>
+      <div class="panel span-3"><div class="label">SOS Energie</div><div class="kpi">{summary["sos_energy_advances"]}</div></div>
+      <div class="panel span-3"><div class="label">Marge SOS</div><div class="kpi">{f'{summary["sos_energy_margin_xaf"]:,}'.replace(",", " ")} FCFA</div></div>
 
       <section class="panel span-12">
         <h2>Le film complet</h2>
@@ -630,9 +665,24 @@ class ApiHandler(BaseHTTPRequestHandler):
           <div class="node"><strong>3. Webhooks</strong><small>La SEEG pousse les evenements vers l'API avec une signature HMAC.</small></div>
           <div class="node"><strong>4. API</strong><small>Valide le JSON, applique la logique metier, stocke les informations dans SQLite.</small></div>
           <div class="node sim"><strong>5. Simulation locale</strong><small>Remplace provisoirement EDAN avec de faux compteurs et de faux dossiers fraude.</small></div>
-          <div class="node fraud"><strong>6. MEROE Fraude</strong><small>Transforme les signaux EDAN en Liste Rouge, score, statut et montant recouvrable.</small></div>
-          <div class="node cash"><strong>7. Dashboard</strong><small>Montre les KPI DAF/DSI : SMS, fraude, recouvrement, fee, audit.</small></div>
+          <div class="node fraud"><strong>6. SOS Energie</strong><small>Avance 2 000 FCFA au client et attend 2 400 FCFA a J+3.</small></div>
+          <div class="node fraud"><strong>7. MEROE Fraude</strong><small>Transforme les signaux EDAN en Liste Rouge, score, statut et montant recouvrable.</small></div>
+          <div class="node cash"><strong>8. Dashboard</strong><small>Montre les KPI DAF/DSI : SMS, SOS, fraude, recouvrement, fee, audit.</small></div>
         </div>
+      </section>
+
+      <section class="panel span-12">
+        <h2>Ordre chronologique du systeme</h2>
+        <div class="step"><div class="num">1</div><div><h3>Le client a un compteur EDAN</h3><p>Le compteur produit les donnees de base : solde, consommation, evenements et statut.</p></div></div>
+        <div class="step"><div class="num">2</div><div><h3>Le client souscrit a SEEG Protect</h3><p>La SEEG appelle <code>POST /webhooks/subscriptions</code>.</p></div></div>
+        <div class="step"><div class="num">3</div><div><h3>Le paiement active le service</h3><p>La SEEG appelle <code>POST /webhooks/payments</code>. Le compteur devient eligible aux alertes.</p></div></div>
+        <div class="step"><div class="num">4</div><div><h3>Le solde faible declenche une alerte</h3><p>La SEEG appelle <code>POST /webhooks/low-balance</code>. Le systeme calcule les jours restants.</p></div></div>
+        <div class="step"><div class="num">5</div><div><h3>Le client recoit le SMS</h3><p>En demo, le SMS est simule. En production, il part via le fournisseur SMS.</p></div></div>
+        <div class="step"><div class="num">6</div><div><h3>SOS Energie peut etre propose</h3><p>Si le client est eligible, MEROE avance <code>2 000 FCFA</code> d'energie et attend <code>2 400 FCFA</code> a J+3.</p></div></div>
+        <div class="step"><div class="num">7</div><div><h3>Le remboursement SOS est suivi</h3><p>Webhook <code>POST /webhooks/sos-energy-repayments</code>. La marge attendue est <code>400 FCFA</code>.</p></div></div>
+        <div class="step"><div class="num">8</div><div><h3>MEROE scanne les signaux fraude</h3><p>Logs EDAN, tamper, tension, 0 kWh et statuts produisent une Liste Rouge.</p></div></div>
+        <div class="step"><div class="num">9</div><div><h3>La SEEG traite la Liste Rouge</h3><p>Agent, huissier, coupure, PV et statut compteur.</p></div></div>
+        <div class="step"><div class="num">10</div><div><h3>Le recouvrement cree la fee MEROE</h3><p>Si la SEEG encaisse, MEROE calcule la success fee fraude de 5% et affiche le resultat au dashboard.</p></div></div>
       </section>
 
       <section class="panel span-6">
@@ -652,6 +702,14 @@ class ApiHandler(BaseHTTPRequestHandler):
       </section>
 
       <section class="panel span-6">
+        <h2>Processus SOS Energie</h2>
+        <div class="step"><div class="num">1</div><div><h3>Client eligible</h3><p>Score Orange ou solde faible : le client peut demander une avance.</p></div></div>
+        <div class="step"><div class="num">2</div><div><h3>Avance</h3><p>Webhook <code>POST /webhooks/sos-energy</code>. MEROE avance <code>2 000 FCFA</code>.</p></div></div>
+        <div class="step"><div class="num">3</div><div><h3>Remboursement</h3><p>Webhook <code>POST /webhooks/sos-energy-repayments</code>. Le client rembourse <code>2 400 FCFA</code> a J+3.</p></div></div>
+        <div class="step"><div class="num">4</div><div><h3>Marge</h3><p>MEROE conserve <code>400 FCFA</code> de marge sur le dossier rembourse.</p></div></div>
+      </section>
+
+      <section class="panel span-6">
         <h2>Simulation locale</h2>
         <p>La simulation sert a voir l'application fonctionner avant les vraies donnees EDAN.</p>
         <p><code>python scripts\\demo_fraud_data.py</code></p>
@@ -667,6 +725,10 @@ class ApiHandler(BaseHTTPRequestHandler):
       <section class="panel span-12">
         <h2>Dossiers fraude actuellement visibles</h2>
         {self.table_html(fraud_cases, ["fraud_case_id", "meter_id", "score_fraud", "fraud_code", "meter_status", "reactivation_reason", "collected_amount_xaf", "success_fee_xaf", "audit_flag"])}
+      </section>
+      <section class="panel span-12">
+        <h2>SOS Energie actuellement visible</h2>
+        {self.table_html(sos_energy, ["advance_id", "meter_id", "amount_advanced_xaf", "amount_due_xaf", "amount_paid_xaf", "margin_xaf", "status", "due_at", "paid_at"])}
       </section>
     </section>
   </main>

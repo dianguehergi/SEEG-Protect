@@ -71,6 +71,38 @@ Webhooks ajoutes pour simuler puis brancher le reel :
 - `POST /webhooks/fraud-status`
 - `GET /fraud-cases?limit=50`
 
+## Flux 3 - SOS Energie
+
+```text
+Client score Orange / solde faible -> Avance 2 000 FCFA -> Energie J+0
+-> Remboursement 2 400 FCFA a J+3 -> Marge MEROE 400 FCFA
+```
+
+Webhooks ajoutes :
+
+- `POST /webhooks/sos-energy`
+- `POST /webhooks/sos-energy-repayments`
+- `GET /sos-energy?limit=50`
+
+## Ordre chronologique du fonctionnement
+
+1. Le client possede un compteur EDAN prepaid.
+2. La SEEG envoie une souscription a SEEG Protect.
+3. Le paiement active le service.
+4. EDAN remonte un solde faible.
+5. SEEG Protect calcule les jours restants.
+6. Le client recoit une alerte SMS.
+7. Si le client est eligible, SOS Energie peut proposer une avance de 2 000 FCFA.
+8. Le client recoit l'energie avancee.
+9. A J+3, le client rembourse 2 400 FCFA.
+10. MEROE enregistre une marge SOS Energie de 400 FCFA.
+11. En parallele, MEROE scanne les signaux fraude EDAN.
+12. Les compteurs suspects entrent en Liste Rouge.
+13. La SEEG traite le dossier terrain : agent, huissier, coupure, PV.
+14. EDAN remonte le statut `COUPE` ou `REACTIVE`.
+15. Si la SEEG encaisse, MEROE calcule la success fee fraude de 5%.
+16. Le dashboard affiche SMS, SOS Energie, fraude, recouvrement, fee et audit.
+
 ## Simulation avant vraies donnees
 
 Le script suivant cree des compteurs fictifs, des alertes SMS et des dossiers
@@ -86,6 +118,8 @@ Les cas simules couvrent :
 - compteur coupe sans recouvrement ;
 - compteur reactive avec motif technique, donc alerte audit ;
 - paiement partiel avec commission prorata.
+- avance SOS Energie 2 000 FCFA remboursee 2 400 FCFA ;
+- avance SOS Energie encore ouverte.
 
 Quand la SEEG donnera les vraies donnees, on remplacera simplement cette source
 de simulation par les vrais webhooks ou fichiers EDAN. La logique dashboard reste
@@ -98,6 +132,7 @@ la meme.
 | Protection client | Souscriptions, paiements, SMS | Montrer le MVP client |
 | Fraude | Dossiers Liste Rouge | Montrer le pipe de recouvrement |
 | DAF | Montant encaisse, fee MEROE | Montrer le ROI |
+| SOS Energie | Avances, remboursements, marge | Montrer le cash court terme |
 | DSI | Evenements, statuts, audit | Montrer la tracabilite |
 | Terrain | `COUPE`, `REACTIVE`, motif | Suivre l'action SEEG |
 

@@ -4,7 +4,15 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from seeg_protect.config import settings
-from seeg_protect.models import FraudCase, FraudStatusUpdate, LowBalanceAlert, PaymentConfirmation, SubscriptionRequest
+from seeg_protect.models import (
+    FraudCase,
+    FraudStatusUpdate,
+    LowBalanceAlert,
+    PaymentConfirmation,
+    SosEnergyAdvance,
+    SosEnergyRepayment,
+    SubscriptionRequest,
+)
 from seeg_protect.services import SeegProtectService
 from seeg_protect.sms import SmsGateway
 from seeg_protect.storage import Storage
@@ -121,8 +129,43 @@ def main() -> None:
             )
         )
 
+    service.request_sos_energy(
+        SosEnergyAdvance(
+            advance_id="SOS-DEMO-001",
+            meter_id="demo-fraud-001",
+            phone_number="+24100000001",
+            amount_advanced_xaf=2_000,
+            amount_due_xaf=2_400,
+            status="ADVANCED",
+            requested_at="2026-09-06T08:00:00+00:00",
+            due_at="2026-09-09T08:00:00+00:00",
+        )
+    )
+    service.repay_sos_energy(
+        SosEnergyRepayment(
+            advance_id="SOS-DEMO-001",
+            meter_id="demo-fraud-001",
+            amount_paid_xaf=2_400,
+            status="REPAID",
+            paid_at="2026-09-09T08:00:00+00:00",
+        )
+    )
+
+    service.request_sos_energy(
+        SosEnergyAdvance(
+            advance_id="SOS-DEMO-002",
+            meter_id="demo-fraud-004",
+            phone_number="+24100000004",
+            amount_advanced_xaf=2_000,
+            amount_due_xaf=2_400,
+            status="ADVANCED",
+            requested_at="2026-09-07T08:00:00+00:00",
+            due_at="2026-09-10T08:00:00+00:00",
+        )
+    )
+
     print("Demo fraude chargee.")
-    print("Ouvre /dashboard pour voir les compteurs, SMS et dossiers fraude.")
+    print("Ouvre /dashboard pour voir les compteurs, SMS, SOS Energie et dossiers fraude.")
     print("Ouvre /fraud-cases?limit=20 pour le JSON des dossiers.")
 
 

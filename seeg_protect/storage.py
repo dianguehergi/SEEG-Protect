@@ -100,6 +100,28 @@ class Storage:
 
                 CREATE INDEX IF NOT EXISTS idx_fraud_cases_status
                 ON fraud_cases (status, meter_status);
+
+                CREATE TABLE IF NOT EXISTS sos_energy_advances (
+                    advance_id TEXT PRIMARY KEY,
+                    meter_id TEXT NOT NULL,
+                    phone_number TEXT NOT NULL,
+                    amount_advanced_xaf INTEGER NOT NULL,
+                    amount_due_xaf INTEGER NOT NULL,
+                    amount_paid_xaf INTEGER NOT NULL,
+                    margin_xaf INTEGER NOT NULL,
+                    status TEXT NOT NULL,
+                    requested_at TEXT NOT NULL,
+                    due_at TEXT,
+                    paid_at TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_sos_energy_meter
+                ON sos_energy_advances (meter_id);
+
+                CREATE INDEX IF NOT EXISTS idx_sos_energy_status
+                ON sos_energy_advances (status);
                 """
             )
 
@@ -248,6 +270,13 @@ class Storage:
             fraud_fee = db.execute(
                 "SELECT COALESCE(SUM(success_fee_xaf), 0) AS total FROM fraud_cases"
             ).fetchone()
+            sos_advances = db.execute("SELECT COUNT(*) AS total FROM sos_energy_advances").fetchone()
+            sos_paid = db.execute(
+                "SELECT COALESCE(SUM(amount_paid_xaf), 0) AS total FROM sos_energy_advances"
+            ).fetchone()
+            sos_margin = db.execute(
+                "SELECT COALESCE(SUM(margin_xaf), 0) AS total FROM sos_energy_advances"
+            ).fetchone()
             return {
                 "subscriptions": int(subscriptions["total"]),
                 "active_subscriptions": int(active["total"]),
@@ -256,6 +285,9 @@ class Storage:
                 "fraud_cases": int(fraud_cases["total"]),
                 "fraud_collected_xaf": int(fraud_collected["total"]),
                 "fraud_success_fee_xaf": int(fraud_fee["total"]),
+                "sos_energy_advances": int(sos_advances["total"]),
+                "sos_energy_paid_xaf": int(sos_paid["total"]),
+                "sos_energy_margin_xaf": int(sos_margin["total"]),
             }
 
     def dashboard_metrics(self) -> dict[str, Any]:
@@ -311,6 +343,14 @@ class Storage:
                 LIMIT 8
                 """
             ).fetchall()
+            sos_statuses = db.execute(
+                """
+                SELECT status, COUNT(*) AS total
+                FROM sos_energy_advances
+                GROUP BY status
+                ORDER BY total DESC
+                """
+            ).fetchall()
             return {
                 "subscription_statuses": [dict(row) for row in subscription_statuses],
                 "notification_statuses": [dict(row) for row in notification_statuses],
@@ -318,6 +358,7 @@ class Storage:
                 "event_types": [dict(row) for row in event_types],
                 "fraud_statuses": [dict(row) for row in fraud_statuses],
                 "fraud_codes": [dict(row) for row in fraud_codes],
+                "sos_statuses": [dict(row) for row in sos_statuses],
             }
 
     def meter_detail(self, meter_id: str, limit: int = 20) -> dict[str, Any] | None:
@@ -470,6 +511,108 @@ class Storage:
                        collected_amount_xaf, success_fee_xaf, audit_flag,
                        detected_at, updated_at
                 FROM fraud_cases
+                ORDER BY updated_at DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+            return [dict(row) for row in rows]
+
+    def create_sos_energy_advance(
+        self,
+        advance_id: str,
+        meter_id: str,
+        phone_number: str,
+        amount_advanced_xaf: int,
+        amount_due_xaf: int,
+        status: str,
+        requested_at: str,
+        due_at: str | None,
+    ) -> dict[str, Any]:
+        with self.connection() as db:
+            db.execute(
+                """
+                INSERT INTO sos_energy_advances (
+                    advance_id, meter_id, phone_number, amount_advanced_xaf,
+                    amount_due_xaf, amount_paid_xaf, margin_xaf, status,
+                    requested_at, due_at, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, ?)
+                ON CONFLICT(advance_id) DO UPDATE SET
+                    meter_id = excluded.meter_id,
+                    phone_number = excluded.phone_number,
+                    amount_advanced_xaf = excluded.amount_advanced_xaf,
+                    amount_due_xaf = excluded.amount_due_xaf,
+                    status = excluded.status,
+                    requested_at = excluded.requested_at,
+                    due_at = excluded.due_at,
+                    updated_at = excluded.updated_at
+                """,
+                (
+                    advance_id,
+                    meter_id,
+                    phone_number,
+                    amount_advanced_xaf,
+                    amount_due_xaf,
+                    status,
+                    requested_at,
+                    due_at,
+                    utc_now_iso(),
+                    utc_now_iso(),
+                ),
+            )
+            row = db.execute(
+                "SELECT * FROM sos_energy_advances WHERE advance_id = ?",
+                (advance_id,),
+            ).fetchone()
+            return dict(row) if row else {}
+
+    def repay_sos_energy_advance(
+        self,
+        advance_id: str,
+        meter_id: str,
+        amount_paid_xaf: int,
+        status: str,
+        paid_at: str,
+    ) -> dict[str, Any]:
+        with self.connection() as db:
+            existing = db.execute(
+                "SELECT * FROM sos_energy_advances WHERE advance_id = ?",
+                (advance_id,),
+            ).fetchone()
+            if not existing:
+                return {}
+            margin = max(0, amount_paid_xaf - int(existing["amount_advanced_xaf"]))
+            db.execute(
+                """
+                UPDATE sos_energy_advances
+                SET meter_id = ?, amount_paid_xaf = ?, margin_xaf = ?,
+                    status = ?, paid_at = ?, updated_at = ?
+                WHERE advance_id = ?
+                """,
+                (meter_id, amount_paid_xaf, margin, status, paid_at, utc_now_iso(), advance_id),
+            )
+            row = db.execute(
+                "SELECT * FROM sos_energy_advances WHERE advance_id = ?",
+                (advance_id,),
+            ).fetchone()
+            return dict(row) if row else {}
+
+    def get_sos_energy_advance(self, advance_id: str) -> dict[str, Any] | None:
+        with self.connection() as db:
+            row = db.execute(
+                "SELECT * FROM sos_energy_advances WHERE advance_id = ?",
+                (advance_id,),
+            ).fetchone()
+            return dict(row) if row else None
+
+    def list_sos_energy_advances(self, limit: int = 50) -> list[dict[str, Any]]:
+        with self.connection() as db:
+            rows = db.execute(
+                """
+                SELECT advance_id, meter_id, phone_number, amount_advanced_xaf,
+                       amount_due_xaf, amount_paid_xaf, margin_xaf, status,
+                       requested_at, due_at, paid_at, updated_at
+                FROM sos_energy_advances
                 ORDER BY updated_at DESC
                 LIMIT ?
                 """,

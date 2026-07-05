@@ -5,7 +5,15 @@ from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from seeg_protect.config import Settings
-from seeg_protect.models import FraudCase, FraudStatusUpdate, LowBalanceAlert, PaymentConfirmation, SubscriptionRequest
+from seeg_protect.models import (
+    FraudCase,
+    FraudStatusUpdate,
+    LowBalanceAlert,
+    PaymentConfirmation,
+    SosEnergyAdvance,
+    SosEnergyRepayment,
+    SubscriptionRequest,
+)
 from seeg_protect.services import SeegProtectService
 from seeg_protect.sms import SmsGateway
 from seeg_protect.storage import Storage
@@ -272,6 +280,35 @@ class ServiceTests(unittest.TestCase):
 
         self.assertEqual(result["fraud_case"]["success_fee_xaf"], 0)
         self.assertEqual(result["fraud_case"]["audit_flag"], 1)
+
+    def test_sos_energy_repayment_calculates_margin(self) -> None:
+        service = self.make_service()
+        service.request_sos_energy(
+            SosEnergyAdvance(
+                advance_id="SOS-1",
+                meter_id="meter-sos",
+                phone_number="+24100000000",
+                amount_advanced_xaf=2000,
+                amount_due_xaf=2400,
+                status="ADVANCED",
+                requested_at="2026-09-06T08:00:00+00:00",
+                due_at="2026-09-09T08:00:00+00:00",
+            )
+        )
+
+        result = service.repay_sos_energy(
+            SosEnergyRepayment(
+                advance_id="SOS-1",
+                meter_id="meter-sos",
+                amount_paid_xaf=2400,
+                status="REPAID",
+                paid_at="2026-09-09T08:00:00+00:00",
+            )
+        )
+
+        self.assertEqual(result["status"], "accepted")
+        self.assertEqual(result["sos_energy"]["amount_paid_xaf"], 2400)
+        self.assertEqual(result["sos_energy"]["margin_xaf"], 400)
 
 
 if __name__ == "__main__":

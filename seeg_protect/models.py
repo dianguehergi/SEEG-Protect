@@ -165,3 +165,56 @@ class FraudStatusUpdate:
             collected_amount_xaf=int(collected_amount),
             changed_at=payload.get("changed_at") or utc_now_iso(),
         )
+
+
+@dataclass(frozen=True)
+class SosEnergyAdvance:
+    advance_id: str
+    meter_id: str
+    phone_number: str
+    amount_advanced_xaf: int
+    amount_due_xaf: int
+    status: str
+    requested_at: str
+    due_at: str | None
+
+    @classmethod
+    def from_payload(cls, payload: dict[str, Any]) -> "SosEnergyAdvance":
+        amount_advanced = optional_number(payload, "amount_advanced_xaf") or 2000
+        amount_due = optional_number(payload, "amount_due_xaf") or 2400
+        if amount_advanced <= 0 or amount_due <= 0:
+            raise ValidationError("SOS Energie amounts must be greater than zero.")
+        if amount_due < amount_advanced:
+            raise ValidationError("Field 'amount_due_xaf' must be greater than or equal to amount_advanced_xaf.")
+        return cls(
+            advance_id=require_string(payload, "advance_id"),
+            meter_id=require_string(payload, "meter_id"),
+            phone_number=require_string(payload, "phone_number"),
+            amount_advanced_xaf=int(amount_advanced),
+            amount_due_xaf=int(amount_due),
+            status=(optional_string(payload, "status") or "ADVANCED").upper(),
+            requested_at=payload.get("requested_at") or utc_now_iso(),
+            due_at=optional_string(payload, "due_at"),
+        )
+
+
+@dataclass(frozen=True)
+class SosEnergyRepayment:
+    advance_id: str
+    meter_id: str
+    amount_paid_xaf: int
+    status: str
+    paid_at: str
+
+    @classmethod
+    def from_payload(cls, payload: dict[str, Any]) -> "SosEnergyRepayment":
+        amount_paid = require_number(payload, "amount_paid_xaf")
+        if amount_paid <= 0:
+            raise ValidationError("Field 'amount_paid_xaf' must be greater than zero.")
+        return cls(
+            advance_id=require_string(payload, "advance_id"),
+            meter_id=require_string(payload, "meter_id"),
+            amount_paid_xaf=int(amount_paid),
+            status=(optional_string(payload, "status") or "REPAID").upper(),
+            paid_at=payload.get("paid_at") or utc_now_iso(),
+        )
