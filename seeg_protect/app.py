@@ -2,6 +2,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from html import escape
 import hmac
 import json
+from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
@@ -24,6 +25,14 @@ from .storage import Storage
 
 storage = Storage(settings.database_path)
 service = SeegProtectService(settings, storage, SmsGateway(settings))
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+MEROE_DASHBOARD = PROJECT_ROOT / "powerbi_meroe_v312" / "dashboard_meroe_v312.html"
+MEROE_BACKGROUND = (
+    PROJECT_ROOT
+    / "powerbi_meroe_v312"
+    / "assets"
+    / "meroe_dashboard_background_v1.png"
+)
 
 
 class ApiHandler(BaseHTTPRequestHandler):
@@ -41,6 +50,20 @@ class ApiHandler(BaseHTTPRequestHandler):
                     "version": settings.version,
                 },
             )
+            return
+
+        if parsed.path in {"/meroe", "/meroe-v312"}:
+            if not MEROE_DASHBOARD.exists():
+                self.send_json(404, {"error": "dashboard_not_found"})
+                return
+            self.send_html(200, MEROE_DASHBOARD.read_text(encoding="utf-8"))
+            return
+
+        if parsed.path == "/assets/meroe-dashboard-background.png":
+            if not MEROE_BACKGROUND.exists():
+                self.send_json(404, {"error": "asset_not_found"})
+                return
+            self.send_bytes(200, MEROE_BACKGROUND.read_bytes(), "image/png", cache=True)
             return
 
         if parsed.path == "/events":
@@ -137,6 +160,7 @@ class ApiHandler(BaseHTTPRequestHandler):
                     "service": settings.app_name,
                     "endpoints": [
                         "GET /health",
+                        "GET /meroe-v312",
                         "GET /events?limit=20",
                         "GET /subscriptions?limit=50",
                         "GET /payments?limit=50",
@@ -234,6 +258,17 @@ class ApiHandler(BaseHTTPRequestHandler):
         self.send_response(status_code)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def send_bytes(
+        self, status_code: int, body: bytes, content_type: str, cache: bool = False
+    ) -> None:
+        self.send_response(status_code)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        if cache:
+            self.send_header("Cache-Control", "public, max-age=86400")
         self.end_headers()
         self.wfile.write(body)
 

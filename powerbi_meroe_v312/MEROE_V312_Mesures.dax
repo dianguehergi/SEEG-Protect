@@ -1,0 +1,24 @@
+-- Créer une table dédiée _Mesures puis ajouter ces mesures dans Power BI.
+CA PROTEC Brut = SUM(flux_airtel[gross_revenue_xaf]) + SUM(flux_guichets_seeg[gross_revenue_xaf])
+CA PROTEC Net MEROE = [CA PROTEC Brut] * 0.70
+Commission IA = SUM(flux_retour_seeg[recovered_amount_xaf]) * 0.10
+Total à recevoir MEROE = [CA PROTEC Net MEROE] + [Commission IA]
+Payé par AIRTEL = SUM(flux_airtel[paid_to_meroe_xaf])
+Payé par SEEG = SUM(flux_guichets_seeg[paid_to_meroe_xaf])
+Impayés / Retard = [Total à recevoir MEROE] - [Payé par AIRTEL] - [Payé par SEEG]
+Abonnés actifs = 4250 + SUM(flux_airtel[subscriptions]) + SUM(flux_guichets_seeg[subscriptions]) - SUM(flux_airtel[unsubscriptions]) - SUM(flux_guichets_seeg[unsubscriptions])
+Nouvelles souscriptions = SUM(flux_airtel[subscriptions]) + SUM(flux_guichets_seeg[subscriptions])
+Désabonnements = SUM(flux_airtel[unsubscriptions]) + SUM(flux_guichets_seeg[unsubscriptions])
+SMS envoyés J-3 = SUM(flux_sms[sent_j3])
+Taux délivrabilité SMS = DIVIDE(SUM(flux_sms[delivered]), [SMS envoyés J-3])
+Appels ligne prioritaire = SUM(flux_calls[priority_calls])
+Taux recharge post-SMS = DIVIDE(SUM(flux_sms[recharged_72h]), SUM(flux_sms[delivered]))
+Compteurs analysés = DISTINCTCOUNT(flux_ia_anomalies[meter_hash])
+Anomalies IA = COUNTROWS(flux_ia_anomalies)
+Fraudes qualifiées = CALCULATE(COUNTROWS(flux_retour_seeg), flux_retour_seeg[qualification_status] = "QUALIFIE_FRAUDE")
+Taux transformation = DIVIDE([Fraudes qualifiées], [Anomalies IA])
+Montant potentiel détecté = SUM(flux_ia_anomalies[estimated_loss_xaf])
+Montant réellement recouvré = SUM(flux_retour_seeg[recovered_amount_xaf])
+Factures émises = CALCULATE(COUNTROWS(flux_administratif), flux_administratif[document_type] = "FACTURE_MEROE", flux_administratif[status] = "EMISE")
+Tickets litiges = SUM(flux_administratif[tickets])
+Dernière actualisation = "Actualisé le " & FORMAT(NOW(), "dd/mm/yyyy HH:mm")

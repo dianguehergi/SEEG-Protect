@@ -1,0 +1,13 @@
+{
+  "name": "MEROE V3.12",
+  "dataColors": ["#20D6B5", "#5B8CFF", "#F5B942", "#FF6B6B", "#8B7CFF", "#8DA2B5"],
+  "background": "#08131F",
+  "foreground": "#F4F7FA",
+  "tableAccent": "#20D6B5",
+  "good": "#20D6B5",
+  "neutral": "#F5B942",
+  "bad": "#FF6B6B",
+  "maximum": "#20D6B5",
+  "center": "#F5B942",
+  "minimum": "#FF6B6B"
+}
