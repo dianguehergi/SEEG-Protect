@@ -1,10 +1,19 @@
-# SEEG Protect
+# MEROE CORE
 
-MVP technique pour une plateforme d'alerte preventive des compteurs prepays SEEG.
+Plateforme pilote pour la SEEG : un portail unique, deux produits et un moteur.
 
-Le service recoit des webhooks pousses par la SEEG, conserve des journaux techniques,
-active les abonnements apres paiement et envoie une notification SMS quand le solde
-d'electricite devient faible.
+Version cible : **MEROE CORE V3.2**.
+
+- Rail 1 : PROTEC, prevention client et SMS pour les abonnes.
+- Rail 2 : SCORING Fraude, Liste Rouge, qualification SEEG et facturation 10%
+  uniquement sur recouvrement prouve.
+
+Le pitch DG :
+
+```text
+Vous avez 1 portail. Vous gerez vos clients ET vous traquez les pertes.
+Nous prenons 0 risque : si nous ne vous rapportons rien, vous ne nous payez rien.
+```
 
 ## Demarrage
 
@@ -42,13 +51,61 @@ http://127.0.0.1:8000
 - `POST /webhooks/sos-energy` : demande d'avance SOS Energie.
 - `POST /webhooks/sos-energy-repayments` : remboursement SOS Energie.
 
+## MEROE CORE V3.2
+
+Le cadrage combine est disponible ici :
+
+- `docs/Architecture_Projet_MEROE.md` : architecture 1 plateforme / 2 rails.
+- `docs/CDC_MEROE_CORE_V3_2.md` : cahier des charges combine DG.
+- `docs/ANNEXE_TECH_MEROE_CORE_V3_2.md` : fichier J+1, PV, scoring, regle 10%.
+- `docs/CDC_PROTEC_RELIEF_V2_5.md` : archive du cadrage PROTEC seul.
+- `scripts/score_meroe_core_v32.py` : scoring fraude explicable V3.2.
+- `scripts/ingest_seeg_v25.py` : ingestion CSV PROTEC legacy.
+- `scripts/algo_protec.py` : moteur de prediction PROTEC legacy.
+
+Commande scoring V3.2 :
+
+```powershell
+python scripts\score_meroe_core_v32.py DATA_SEEG_J1.csv
+```
+
+Format CSV V3.2 minimal :
+
+```text
+numero_compteur;index_n;index_n_1;conso;etat_sts;recharges;canal_paiement
+1234567890;950;1000;0;COUVERCLE_OUVERT;2;AIRTEL
+```
+
+Commandes PROTEC legacy :
+
+```powershell
+python scripts\ingest_seeg_v25.py SEEG_PROTEC_J0_20261004.csv
+python scripts\algo_protec.py
+```
+
+Format CSV PROTEC legacy :
+
+```text
+numero_compteur;date_achat;montant_f
+1234567890;04/10/2026 08:31;5000
+```
+
+Variables Postgres optionnelles :
+
+- `PROTEC_DB_HOST`
+- `PROTEC_DB_PORT`
+- `PROTEC_DB_NAME`
+- `PROTEC_DB_USER`
+- `PROTEC_DB_PASS`
+
 Les endpoints `POST` exigent l'en-tete `X-SEEG-Signature`, calcule avec HMAC SHA-256
 sur le corps brut de la requete.
 
-## Extension MEROE fraude V6.4
+## Archive MEROE fraude V6.4
 
-Le projet contient aussi les nouveaux livrables de cadrage pour la brique
-scoring fraude / Liste Rouge :
+Le projet contient aussi les anciens livrables V6.4 de cadrage fraude. Ils sont
+conserves comme archive technique, mais le cadrage DG actuel est V3.2 avec une
+regle de facturation a 10% sur recouvrement prouve.
 
 - `docs/Flux_Fraude_MEROE_V6_4.md` : flux Data EDAN -> Terrain SEEG -> Cash DAF.
 - `docs/api_meroe_seeg_v1.yaml` : OpenAPI cible pour Liste Rouge, statut EDAN,
@@ -56,9 +113,8 @@ scoring fraude / Liste Rouge :
 - `docs/grille_fraude_seeg.csv` : codes fraude SEEG et baremes PV HT.
 - `scripts/sandbox_meroe_fraud_flow.py` : simulation des 3 cas sandbox.
 
-Cette extension reste au niveau specification dans le MVP actuel. Elle prepare
-l'industrialisation du scanner MEROE : score fraude, statut compteur read-only,
-facturation 5% au prorata du montant recouvre et controles DAF/DSI.
+Cette archive preparait l'industrialisation du scanner MEROE : score fraude,
+statut compteur read-only, bordereau DAF et controles DAF/DSI.
 
 ## Exemple de signature
 

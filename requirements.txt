@@ -1,5 +1,7 @@
-# Runtime currently uses only Python standard library.
+# Runtime MVP currently uses only Python standard library.
 # Optional future upgrade:
 # fastapi
 # uvicorn
 
+# PROTEC Relief V2.5 M1 ingestion Postgres:
+# psycopg2-binary
