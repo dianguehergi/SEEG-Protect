@@ -4,21 +4,17 @@ services:
     env: docker
     plan: free
     healthCheckPath: /health
-    disk:
-      name: seeg-protect-data
-      mountPath: /app/data
-      sizeGB: 1
     envVars:
       - key: SEEG_PROTECT_HOST
         value: 0.0.0.0
       - key: SEEG_PROTECT_PORT
         value: 8000
       - key: SEEG_PROTECT_DB
-        value: /app/data/seeg_protect.sqlite3
+        value: /tmp/seeg_protect.sqlite3
       - key: SEEG_PROTECT_EVENT_LOG
-        value: /app/data/events.jsonl
+        value: /tmp/events.jsonl
       - key: SEEG_PROTECT_SMS_OUTBOX
-        value: /app/data/sms_outbox.jsonl
+        value: /tmp/sms_outbox.jsonl
       - key: SEEG_PROTECT_SMS_PROVIDER
         value: stub
       - key: SEEG_PROTECT_WEBHOOK_SECRET
