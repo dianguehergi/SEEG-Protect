@@ -21,3 +21,7 @@ services:
         generateValue: true
       - key: SEEG_PROTECT_ADMIN_TOKEN
         generateValue: true
+      - key: MEROE_OWNER_PASSWORD
+        generateValue: true
+      - key: MEROE_COLLABORATOR_PASSWORD
+        generateValue: true

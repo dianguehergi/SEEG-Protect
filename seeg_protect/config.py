@@ -22,6 +22,8 @@ class Settings:
         os.getenv("SEEG_PROTECT_LOW_BALANCE_SMS_COOLDOWN_HOURS", "24")
     )
     admin_token: str = os.getenv("SEEG_PROTECT_ADMIN_TOKEN", "")
+    meroe_owner_password: str = os.getenv("MEROE_OWNER_PASSWORD", "")
+    meroe_collaborator_password: str = os.getenv("MEROE_COLLABORATOR_PASSWORD", "")
 
 
 settings = Settings()

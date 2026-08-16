@@ -1,8 +1,10 @@
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from html import escape
+import hashlib
 import hmac
 import json
 from pathlib import Path
+import time
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
@@ -27,6 +29,9 @@ storage = Storage(settings.database_path)
 service = SeegProtectService(settings, storage, SmsGateway(settings))
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 MEROE_DASHBOARD = PROJECT_ROOT / "powerbi_meroe_v312" / "dashboard_meroe_v312.html"
+MEROE_COLLABORATOR_DASHBOARD = (
+    PROJECT_ROOT / "powerbi_meroe_v312" / "dashboard_collaborateur_v312.html"
+)
 MEROE_BACKGROUND = (
     PROJECT_ROOT
     / "powerbi_meroe_v312"
@@ -53,10 +58,24 @@ class ApiHandler(BaseHTTPRequestHandler):
             return
 
         if parsed.path in {"/meroe", "/meroe-v312"}:
-            if not MEROE_DASHBOARD.exists():
+            role = self.meroe_session_role()
+            if not role:
+                self.send_html(200, self.meroe_login_html(), cache="no-store")
+                return
+            dashboard = (
+                MEROE_DASHBOARD if role == "owner" else MEROE_COLLABORATOR_DASHBOARD
+            )
+            if not dashboard.exists():
                 self.send_json(404, {"error": "dashboard_not_found"})
                 return
-            self.send_html(200, MEROE_DASHBOARD.read_text(encoding="utf-8"))
+            self.send_html(200, dashboard.read_text(encoding="utf-8"), cache="no-store")
+            return
+
+        if parsed.path == "/meroe-logout":
+            self.send_redirect(
+                "/meroe-v312",
+                "meroe_session=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Strict",
+            )
             return
 
         if parsed.path == "/assets/meroe-dashboard-background.png":
@@ -190,6 +209,29 @@ class ApiHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         raw_body = self.read_body()
+        parsed = urlparse(self.path)
+        if parsed.path == "/meroe-login":
+            form = parse_qs(raw_body.decode("utf-8", errors="replace"))
+            role = (form.get("role", [""])[0] or "").strip()
+            password = form.get("password", [""])[0] or ""
+            expected = {
+                "owner": settings.meroe_owner_password,
+                "collaborator": settings.meroe_collaborator_password,
+            }.get(role, "")
+            if expected and hmac.compare_digest(password, expected):
+                cookie = (
+                    f"meroe_session={self.create_meroe_session(role)}; Path=/; Max-Age=43200; "
+                    "HttpOnly; Secure; SameSite=Strict"
+                )
+                self.send_redirect("/meroe-v312", cookie)
+                return
+            self.send_html(
+                401,
+                self.meroe_login_html("Identifiants incorrects."),
+                cache="no-store",
+            )
+            return
+
         if not verify_signature(settings.webhook_secret, raw_body, self.headers.get("X-SEEG-Signature")):
             self.send_json(401, {"error": "invalid_signature"})
             return
@@ -199,7 +241,6 @@ class ApiHandler(BaseHTTPRequestHandler):
             if not isinstance(payload, dict):
                 raise ValidationError("JSON body must be an object.")
 
-            parsed = urlparse(self.path)
             if parsed.path == "/webhooks/subscriptions":
                 response = service.register_subscription(SubscriptionRequest.from_payload(payload))
                 self.send_json(202, response)
@@ -253,13 +294,57 @@ class ApiHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def send_html(self, status_code: int, html: str) -> None:
+    def send_html(self, status_code: int, html: str, cache: str | None = None) -> None:
         body = html.encode("utf-8")
         self.send_response(status_code)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
+        if cache:
+            self.send_header("Cache-Control", cache)
         self.end_headers()
         self.wfile.write(body)
+
+    def send_redirect(self, location: str, cookie: str | None = None) -> None:
+        self.send_response(303)
+        self.send_header("Location", location)
+        if cookie:
+            self.send_header("Set-Cookie", cookie)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    @staticmethod
+    def create_meroe_session(role: str, now: int | None = None) -> str:
+        expires = (int(time.time()) if now is None else now) + 43200
+        payload = f"{role}.{expires}"
+        signature = hmac.new(
+            settings.webhook_secret.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256
+        ).hexdigest()
+        return f"{payload}.{signature}"
+
+    def meroe_session_role(self, now: int | None = None) -> str | None:
+        cookies = self.headers.get("Cookie", "")
+        token = next(
+            (part.split("=", 1)[1] for part in cookies.split(";") if part.strip().startswith("meroe_session=")),
+            "",
+        )
+        try:
+            role, expires_text, signature = token.strip().split(".", 2)
+            expires = int(expires_text)
+        except (ValueError, TypeError):
+            return None
+        if role not in {"owner", "collaborator"} or expires < (int(time.time()) if now is None else now):
+            return None
+        payload = f"{role}.{expires}"
+        expected = hmac.new(
+            settings.webhook_secret.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256
+        ).hexdigest()
+        return role if hmac.compare_digest(signature, expected) else None
+
+    @staticmethod
+    def meroe_login_html(error: str = "") -> str:
+        alert = f'<div class="error">{escape(error)}</div>' if error else ""
+        return f"""<!doctype html><html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Connexion MÉROÉ</title><style>
+*{{box-sizing:border-box}}body{{margin:0;min-height:100vh;display:grid;place-items:center;color:#f4f7fa;font:14px Segoe UI,sans-serif;background:#06111c url('/assets/meroe-dashboard-background.png') center/cover}}body:before{{content:'';position:fixed;inset:0;background:rgba(3,13,22,.72);z-index:-1}}.box{{width:min(430px,92vw);padding:32px;border:1px solid #315467;border-radius:22px;background:rgba(8,28,42,.92);box-shadow:0 25px 70px #0008;backdrop-filter:blur(18px)}}.mark{{width:52px;height:52px;display:grid;place-items:center;border-radius:16px;background:linear-gradient(145deg,#20d6b5,#5b8cff);font-weight:900;font-size:20px}}h1{{margin:20px 0 6px}}p{{color:#9db0be}}label{{display:block;margin:20px 0 7px;color:#c8d5de}}select,input{{width:100%;padding:13px;border-radius:10px;border:1px solid #315467;background:#0d293b;color:white}}button{{width:100%;margin-top:24px;padding:13px;border:0;border-radius:10px;background:linear-gradient(90deg,#20d6b5,#5b8cff);font-weight:800;color:#06111c;cursor:pointer}}.error{{margin-top:15px;padding:10px;border-radius:8px;color:#ff8b8b;background:#ff6b6b18}}small{{display:block;margin-top:18px;color:#71899a}}</style></head><body><form class="box" method="post" action="/meroe-login"><div class="mark">M</div><h1>MÉROÉ Control Center</h1><p>Accès sécurisé selon votre niveau d’autorisation.</p>{alert}<label>Profil</label><select name="role" required><option value="collaborator">Collaborateur opérationnel</option><option value="owner">Propriétaire — accès complet</option></select><label>Mot de passe</label><input type="password" name="password" autocomplete="current-password" required><button type="submit">Se connecter</button><small>Session sécurisée de 12 heures · Aucune donnée nominative</small></form></body></html>"""
 
     def send_bytes(
         self, status_code: int, body: bytes, content_type: str, cache: bool = False

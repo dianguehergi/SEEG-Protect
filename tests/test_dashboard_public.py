@@ -1,7 +1,12 @@
 import unittest
 from unittest.mock import MagicMock
 
-from seeg_protect.app import ApiHandler, MEROE_BACKGROUND, MEROE_DASHBOARD
+from seeg_protect.app import (
+    ApiHandler,
+    MEROE_BACKGROUND,
+    MEROE_COLLABORATOR_DASHBOARD,
+    MEROE_DASHBOARD,
+)
 
 
 class PublicDashboardTests(unittest.TestCase):
@@ -12,6 +17,23 @@ class PublicDashboardTests(unittest.TestCase):
         self.assertIn("MÉROÉ CONTROL CENTER", html)
         self.assertIn("Aucune donnée nominative", html)
         self.assertIn("/assets/meroe-dashboard-background.png", html)
+
+    def test_collaborator_dashboard_excludes_financial_information(self):
+        self.assertTrue(MEROE_COLLABORATOR_DASHBOARD.exists())
+        html = MEROE_COLLABORATOR_DASHBOARD.read_text(encoding="utf-8")
+        self.assertIn("LISTE ROUGE", html)
+        self.assertIn("SMS ENVOYÉS", html)
+        for forbidden in ("CA PROTEC", "COMMISSION IA", "FCFA", "RECOUVRÉ", "MONTANT POTENTIEL"):
+            self.assertNotIn(forbidden, html.upper())
+
+    def test_signed_sessions_are_role_scoped_and_expire(self):
+        handler = object.__new__(ApiHandler)
+        token = handler.create_meroe_session("collaborator", now=1000)
+        handler.headers = {"Cookie": f"meroe_session={token}"}
+        self.assertEqual("collaborator", handler.meroe_session_role(now=1001))
+        self.assertIsNone(handler.meroe_session_role(now=50000))
+        handler.headers = {"Cookie": f"meroe_session={token}tampered"}
+        self.assertIsNone(handler.meroe_session_role(now=1001))
 
     def test_send_bytes_sets_cache_header(self):
         handler = object.__new__(ApiHandler)
